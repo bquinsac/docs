@@ -50,20 +50,28 @@ Le Stockage Objet Cloud Temple est un service de stockage d'objets hautement sé
     Default region name [None]: fr1
     Default output format [None]: json
     ```
-    Contrairement à `mc`, le client AWS ne sauvegarde pas le point de terminaison (endpoint). Vous devrez le spécifier pour chaque commande avec l'option `--endpoint-url`.
 
-    Le point de terminaison de votre service est : `https://VOTRE_NAMESPACE.s3.fr1.cloud-temple.com`
+    Le stockage objet Cloud Temple repose sur Dell EMC ECS, une implémentation S3-compatible qui ne prend pas en charge certaines extensions récentes d'AWS CLI v2, notamment le mode de transfert chunked avec checksum `CRC64NVME` activé par défaut depuis la version 2.x. Sans configuration spécifique, les uploads échouent avec l'erreur `XAmzContentSHA256Mismatch`.
 
-    **Astuce :** Pour éviter de taper le endpoint à chaque fois, vous pouvez le définir dans le fichier de configuration AWS (`~/.aws/config`) en créant un profil dédié :
+    Il est nécessaire d'ajouter le paramètre suivant pour désactiver ce comportement :
+
+    ```bash
+    ❯ aws configure set request_checksum_calculation when_required
+    ```
+
+    **Astuce :** Pour éviter de taper le endpoint à chaque fois, vous pouvez le définir dans le fichier de configuration AWS (`~/.aws/config`) en créant un profil dédié qui intègre également ce paramètre :
+
     ```ini
     [profile cloudtemple]
     region = fr1
     output = json
+    request_checksum_calculation = when_required
     s3 =
       endpoint_url = https://VOTRE_NAMESPACE.s3.fr1.cloud-temple.com
     s3api =
       endpoint_url = https://VOTRE_NAMESPACE.s3.fr1.cloud-temple.com
     ```
+
     Vous pourrez ensuite utiliser ce profil avec l'option `--profile cloudtemple` sur chaque commande.
 
   </TabItem>
@@ -107,40 +115,8 @@ Le Stockage Objet Cloud Temple est un service de stockage d'objets hautement sé
     Dans l'onglet '__Paramètres__' vous pouvez voir le détail des informations de votre bucket S3 :
     <img src={S3Params} />
 
-    **Note importante** : La notion de '__Protection de suppression__' correspond à la durée de protection de la donnée, et non à une suppression programmée. Les données restent accessibles pendant toute la période de configurée. Pour provoquer une suppression automatique des données à l'issue de la période de rétention, il est nécessaire de définir une politique de cycle de vie (lifecycle).
+    **Note importante** : La notion de '__Protection de suppression__' correspond à la durée de protection de la donnée, et non à une suppression programmée. Les données restent accessibles pendant toute la période configurée. Pour provoquer une suppression automatique des données à l'issue de la période de rétention, il est nécessaire de définir une politique de cycle de vie (lifecycle).
 
-    **Exemple de politique de cycle de vie** (`lifecycle.json`):
-
-    **Prérequis**:
-
-    - le compte de stockage '__clé d'accès global__' doit être utilisé car il doit avoir les droits '__s3:PutLifecycleConfiguration__' et '__s3:GetLifecycleConfiguration__' sur le bucket.
-
-    ```json
-    {
-      "Rules": [
-        {
-          "ID": "DeleteOldObjects",
-          "Prefix": "",  // "" = tout le bucket, sinon mettre un préfixe spécifique
-          "Status": "Enabled",
-          "Expiration": {
-            "Days": 30  // supprime après 30 jours
-          },
-          "NoncurrentVersionExpiration": {
-            "NoncurrentDays": 7  // supprime les anciennes versions 7 jours après création d'une nouvelle
-          }
-        }
-      ]
-    }
-    ```
-
-    Si vous utilisez AWS CLI :
-
-    ```bash
-    aws --endpoint-url https://<ecs-endpoint> \
-    s3api put-bucket-lifecycle-configuration \
-    --bucket <nom-du-bucket> \
-    --lifecycle-configuration file://lifecycle.json
-    ```
   </TabItem>
   <TabItem value="MC CLI" label="MC CLI">
     ```bash
@@ -226,7 +202,7 @@ Le Stockage Objet Cloud Temple est un service de stockage d'objets hautement sé
     La plateforme vous donne alors la clef d'accès et la clef secrète de votre bucket :
     <img src={S3StorageKeys} />
     __ATTENTION :__ Les clés secrète et d'accès sont présentées une seule fois. Après cette première apparition, il devient impossible de consulter à nouveau la clé secrète. Il est donc essentiel de noter ces informations immédiatement ; faute de quoi, il vous sera nécessaire de générer une nouvelle paire de clés.
-    La regeneration se fait au niveau des options de la clefs en choisissant l'option "Réinitialiser clé d'accès".
+    La regénération se fait au niveau des options de la clef en choisissant l'option "Réinitialiser clé d'accès".
     <img src={S3Keyregen} />
   </TabItem>
   <TabItem value="AWS CLI" label="AWS CLI">
@@ -298,5 +274,101 @@ Le Stockage Objet Cloud Temple est un service de stockage d'objets hautement sé
   </TabItem>
   <TabItem value="MC CLI" label="MC CLI">
     La gestion fine des politiques d'accès via le client `mc` (`policy` commands) est une opération avancée. Pour la majorité des cas d'usage, nous recommandons de passer par la console Cloud Temple pour une configuration simplifiée et sécurisée.
+  </TabItem>
+</Tabs>
+
+## Gérer le cycle de vie des objets (lifecycle)
+
+Les politiques de cycle de vie permettent d'automatiser la suppression d'objets après une durée configurable. Elles sont complémentaires à la **Protection de suppression** (rétention) : la rétention protège les données pendant une période donnée, la lifecycle les supprime automatiquement à son terme.
+
+**Prérequis** : le compte de stockage utilisé doit disposer des droits `s3:PutLifecycleConfiguration` et `s3:GetLifecycleConfiguration` sur le bucket concerné. En pratique, il est recommandé d'utiliser la **clé d'accès global** du tenant.
+
+<Tabs>
+  <TabItem value="Console Cloud Temple" label="Console Cloud Temple" default>
+    La gestion des politiques de cycle de vie est disponible dans l'onglet '__Cycle de vie__' du bucket.
+    <img src={S3Lifecycle} />
+  </TabItem>
+  <TabItem value="AWS CLI" label="AWS CLI">
+
+    ### Appliquer une politique de cycle de vie
+
+    Créez un fichier `lifecycle.json` décrivant vos règles :
+
+    ```json
+    {
+      "Rules": [
+        {
+          "ID": "DeleteOldObjects",
+          "Prefix": "",
+          "Status": "Enabled",
+          "Expiration": {
+            "Days": 30
+          },
+          "NoncurrentVersionExpiration": {
+            "NoncurrentDays": 7
+          }
+        }
+      ]
+    }
+    ```
+
+    Paramètres clés :
+
+    | Paramètre | Description |
+    |---|---|
+    | `Prefix` | Périmètre de la règle. `""` = tout le bucket, sinon un préfixe de chemin (ex: `"logs/"`) |
+    | `Expiration.Days` | Délai en jours avant suppression des objets courants |
+    | `NoncurrentVersionExpiration.NoncurrentDays` | Délai en jours avant suppression des versions non-courantes (buckets versionnés) |
+    | `Status` | `Enabled` ou `Disabled` |
+
+    Appliquez la politique :
+
+    ```bash
+    ❯ aws s3api put-bucket-lifecycle-configuration \
+        --bucket demo-app \
+        --lifecycle-configuration file://lifecycle.json \
+        --endpoint-url https://VOTRE_NAMESPACE.s3.fr1.cloud-temple.com
+    ```
+
+    ### Consulter la politique en place
+
+    ```bash
+    ❯ aws s3api get-bucket-lifecycle-configuration \
+        --bucket demo-app \
+        --endpoint-url https://VOTRE_NAMESPACE.s3.fr1.cloud-temple.com
+    ```
+
+    ### Supprimer la politique
+
+    ```bash
+    ❯ aws s3api delete-bucket-lifecycle \
+        --bucket demo-app \
+        --endpoint-url https://VOTRE_NAMESPACE.s3.fr1.cloud-temple.com
+    ```
+
+  </TabItem>
+  <TabItem value="MC CLI" label="MC CLI">
+
+    ### Appliquer une politique de cycle de vie
+
+    Créez un fichier `lifecycle.json` (même format que pour AWS CLI, voir onglet AWS CLI).
+
+    ```bash
+    ❯ mc ilm import cloudtemple-fr1/demo-app < lifecycle.json
+    Lifecycle configuration imported successfully to `cloudtemple-fr1/demo-app`.
+    ```
+
+    ### Consulter la politique en place
+
+    ```bash
+    ❯ mc ilm ls cloudtemple-fr1/demo-app
+    ```
+
+    ### Supprimer la politique
+
+    ```bash
+    ❯ mc ilm rm --all --force cloudtemple-fr1/demo-app
+    ```
+
   </TabItem>
 </Tabs>
